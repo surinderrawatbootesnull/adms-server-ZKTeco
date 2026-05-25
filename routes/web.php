@@ -3,7 +3,6 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\DeviceController;
 use App\Http\Controllers\iclockController;
-use Illuminate\Support\Facades\Artisan;
 
 /*
 |--------------------------------------------------------------------------
@@ -12,13 +11,6 @@ use Illuminate\Support\Facades\Artisan;
 | Loading any page on your site once with these lines active will flush 
 | Hostinger's cached routing maps. Delete or comment them out afterward.
 */
-try {
-    Artisan::call('route:clear');
-    Artisan::call('cache:clear');
-} catch (\Exception $e) {
-    // Fail silently if artisan commands are restricted on your host
-}
-
 /*
 |--------------------------------------------------------------------------
 | Web Routes

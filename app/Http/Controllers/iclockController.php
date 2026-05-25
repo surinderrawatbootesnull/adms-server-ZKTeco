@@ -10,63 +10,77 @@ class iclockController extends Controller
 {
     public function handleCdata(Request $request)
     {
-        $method = $request->method();
         $sn = $request->query('SN') ?? 'UNKNOWN';
-        $rawContent = file_get_contents('php://input');
+        $table = $request->query('table') ?? '';
 
-        // This will let us see if the machine successfully authenticates
-        Log::info("Hardware Touchpoint - Method: {$method}, SN: {$sn}");
+        Log::info("ADMS request - Method: {$request->method()}, SN: {$sn}, Table: {$table}");
 
-        // 1. PROCESS INCOMING PUNCTURE PAYLOAD
-        if (!empty($rawContent)) {
-            $lines = explode("\n", $rawContent);
-            foreach ($lines as $line) {
-                $line = trim($line);
-                if (empty($line)) continue;
+        if ($request->isMethod('post')) {
+            $rawContent = $request->getContent();
+            $tot = 0;
 
-                $data = explode("\t", $line);
-                if (count($data) >= 2) {
-                    $userId    = trim($data[0]); 
-                    $timestamp = trim($data[1]); 
-                    
+            if (!empty($rawContent)) {
+                $lines = preg_split('/\r\n|\r|\n/', $rawContent);
+                foreach ($lines as $line) {
+                    $line = trim($line);
+                    if (empty($line)) continue;
+
+                    $data = explode("\t", $line);
+                    if (count($data) < 2) continue;
+
                     try {
-                        DB::table('device_logs')->insertOrIgnore([
-                            'serial_number' => $sn,
-                            'user_id'       => $userId,
-                            'punch_time'    => $timestamp,
-                            'created_at'    => now(),
-                            'updated_at'    => now()
+                        DB::table('attendances')->insert([
+                            'sn'          => $sn,
+                            'table'       => $table,
+                            'stamp'       => $request->query('Stamp') ?? '',
+                            'employee_id' => (int) trim($data[0]),
+                            'timestamp'   => trim($data[1]),
+                            'status1'     => isset($data[2]) && $data[2] !== '' ? (int)$data[2] : null,
+                            'status2'     => isset($data[3]) && $data[3] !== '' ? (int)$data[3] : null,
+                            'status3'     => isset($data[4]) && $data[4] !== '' ? (int)$data[4] : null,
+                            'status4'     => isset($data[5]) && $data[5] !== '' ? (int)$data[5] : null,
+                            'status5'     => isset($data[6]) && $data[6] !== '' ? (int)$data[6] : null,
+                            'created_at'  => now(),
+                            'updated_at'  => now(),
                         ]);
+                        $tot++;
                     } catch (\Exception $e) {
-                        Log::error("Database Write Error: " . $e->getMessage());
+                        Log::error("Attendance insert error: " . $e->getMessage());
                     }
                 }
             }
-            return response("GBK\nOK\n", 200)->header('Content-Type', 'text/plain');
+
+            return response("OK: $tot\n", 200)->header('Content-Type', 'text/plain');
         }
 
-        // 2. THE HOSTINGER BYPASS HANDSHAKE
-        // These specific ADMS firmware flags instruct the device to format its internal 
-        // network packets to match Hostinger's exact domain routing rules.
-        $resp = "GET OPTION FROM: $sn\n" .
-                "Registry=1\n" .
-                "Delay=10\n" .
-                "ErrorDelay=30\n" .
-                "TransTimes=00:00;23:59\n" .
-                "TransInterval=1\n" .
-                "Realtime=1\n" .
-                "CustomHost=essl.bootesnull.in\n" . // Forces the device to inject the Host header
-                "HTTPHeaders=Host: essl.bootesnull.in\n" . // Appends explicitly to the packet wrapper
-                "OK\n";
+        // GET — handshake response
+        DB::table('devices')->updateOrInsert(
+            ['no_sn' => $sn],
+            ['online' => now()]
+        );
+
+        $resp = "GET OPTION FROM: $sn\r\n" .
+                "Stamp=9999\r\n" .
+                "OpStamp=" . time() . "\r\n" .
+                "ErrorDelay=60\r\n" .
+                "Delay=30\r\n" .
+                "ResLogDay=18250\r\n" .
+                "ResLogDelCount=10000\r\n" .
+                "ResLogCount=50000\r\n" .
+                "TransTimes=00:00;23:59\r\n" .
+                "TransInterval=1\r\n" .
+                "TransFlag=1111000000\r\n" .
+                "Realtime=1\r\n" .
+                "Encrypt=0\r\n";
 
         return response($resp, 200)->header('Content-Type', 'text/plain');
     }
 
-    public function getrequest(Request $request) {
+    public function getrequest() {
         return response("OK", 200)->header('Content-Type', 'text/plain');
     }
 
-    public function devicecmd(Request $request) {
+    public function devicecmd() {
         return response("OK", 200)->header('Content-Type', 'text/plain');
     }
 }
