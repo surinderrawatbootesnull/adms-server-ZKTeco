@@ -1,8 +1,4 @@
-﻿# Strip any special Apache handler for .aspx so mod_rewrite processes it normally
-RemoveHandler .aspx
-RemoveType .aspx
-
-<IfModule mod_rewrite.c>
+﻿<IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes
     </IfModule>

@@ -1,14 +1,10 @@
-﻿# Strip any special Apache handler for .aspx so mod_rewrite processes it normally
-RemoveHandler .aspx
-RemoveType .aspx
-
-<IfModule mod_rewrite.c>
+﻿<IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteBase /
+    Options -MultiViews
 
-    # 1. Route ALL iclock paths (with or without .aspx) into Laravel — NO redirect
-    RewriteCond %{REQUEST_URI} ^/iclock [NC]
-    RewriteRule ^(.*)$ public/index.php [L,QSA]
+    # 1. Catch all /iclock/*.aspx and /iclock/* FIRST before any Apache handler
+    RewriteRule ^iclock/.*\.aspx$ public/index.php [L,QSA,NC]
+    RewriteRule ^iclock/.*$ public/index.php [L,QSA,NC]
 
     # 2. Force HTTPS for non-biometric traffic
     RewriteCond %{HTTPS} off
