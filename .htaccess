@@ -1,4 +1,17 @@
-<IfModule mod_rewrite.c>
+﻿<IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteRule ^(.*)$ public/$1 [L]
+    RewriteBase /
+
+    # 1. Route ALL iclock paths (with or without .aspx) into Laravel — NO redirect
+    RewriteCond %{REQUEST_URI} ^/iclock [NC]
+    RewriteRule ^(.*)$ public/index.php [L,QSA]
+
+    # 2. Force HTTPS for non-biometric traffic
+    RewriteCond %{HTTPS} off
+    RewriteCond %{REQUEST_URI} !^/iclock [NC]
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+    # 3. Route all other traffic through Laravel
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteRule ^(.*)$ public/index.php [L,QSA]
 </IfModule>

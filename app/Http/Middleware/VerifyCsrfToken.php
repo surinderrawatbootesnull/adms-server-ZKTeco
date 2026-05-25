@@ -12,8 +12,13 @@ class VerifyCsrfToken extends Middleware
      * @var array<int, string>
      */
     protected $except = [
-        //
-        'iclock/cdata',
-        'iclock/getrequest'
+        'iclock/*',
+        'iclock/cdata*',
+	'iclock/getrequest*',
+        'iclock/cdata.aspx',
+        'iclock/getrequest.aspx',
+        '//iclock/*',
+        '//iclock/cdata*',
+        'www.iclock/*'
     ];
 }

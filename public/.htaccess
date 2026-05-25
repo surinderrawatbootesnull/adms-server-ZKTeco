@@ -1,20 +1,22 @@
-<IfModule mod_rewrite.c>
+﻿<IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes
     </IfModule>
 
     RewriteEngine On
 
-    # Handle Authorization Header
-    RewriteCond %{HTTP:Authorization} .
-    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+    # 1. THE FIREWALL BYPASS: If the machine hits /iclock, handle it immediately as plain HTTP
+    # This stops Hostinger from sending a 301/302 redirect back to the machine
+    RewriteCond %{REQUEST_URI} ^/iclock [NC]
+    RewriteRule ^ index.php [L]
 
-    # Redirect Trailing Slashes If Not A Folder...
-    RewriteCond %{REQUEST_FILENAME} !-d
-    RewriteCond %{REQUEST_URI} (.+)/$
-    RewriteRule ^ %1 [L,R=301]
+    # 2. STANDARD WEB HTTPS ENFORCEMENT
+    # Force HTTPS ONLY for actual web browsers accessing dashboards or pages
+    RewriteCond %{HTTPS} off
+    RewriteCond %{REQUEST_URI} !^/iclock [NC]
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
-    # Send Requests To Front Controller...
+    # 3. STANDARD LARAVEL ROUTING ENGINE
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteRule ^ index.php [L]
