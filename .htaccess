@@ -1,4 +1,8 @@
-﻿<IfModule mod_rewrite.c>
+﻿# Strip any special Apache handler for .aspx so mod_rewrite processes it normally
+RemoveHandler .aspx
+RemoveType .aspx
+
+<IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteBase /
 
