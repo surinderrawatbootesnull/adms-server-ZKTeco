@@ -10,6 +10,11 @@ class iclockController extends Controller
 {
     public function handleCdata(Request $request)
     {
+        $secret = 'c63b75c1207fc357379492a8d5a0bb7af92604c5791b39e5cb7eff2e46fff1fa';
+        if ($request->header('X-ADMS-Token') !== $secret) {
+            return response('Forbidden', 403);
+        }
+
         $sn = $request->query('SN') ?? 'UNKNOWN';
         $table = $request->query('table') ?? '';
 
