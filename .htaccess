@@ -1,4 +1,9 @@
-﻿<IfModule mod_rewrite.c>
+﻿<IfModule mod_security.c>
+    SecRuleRemoveById 400011
+    SecRuleRemoveById 400012
+</IfModule>
+
+<IfModule mod_rewrite.c>
     RewriteEngine On
     Options -MultiViews
 
