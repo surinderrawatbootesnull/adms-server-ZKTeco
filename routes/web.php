@@ -3,46 +3,99 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\DeviceController;
 use App\Http\Controllers\iclockController;
+use App\Http\Controllers\AuthController;
 
 /*
 |--------------------------------------------------------------------------
-| Cache Reset Trigger (Temporary)
-|--------------------------------------------------------------------------
-| Loading any page on your site once with these lines active will flush 
-| Hostinger's cached routing maps. Delete or comment them out afterward.
-*/
-/*
-|--------------------------------------------------------------------------
-| Web Routes
+| LOGIN ROUTES (NO AUTH)
 |--------------------------------------------------------------------------
 */
 
-// 1. Dashboard Routes
-Route::get('/', function () {
-    return redirect()->route('devices.index');
+Route::get('/login', [AuthController::class, 'showLogin']);
+Route::post('/login', [AuthController::class, 'login']);
+Route::get('/logout', [AuthController::class, 'logout']);
+
+
+/*
+|--------------------------------------------------------------------------
+| PROTECTED DASHBOARD ROUTES
+|--------------------------------------------------------------------------
+*/
+
+Route::middleware([
+    'verify.passport.token',
+])->group(function () {
+
+    Route::get('/', function () {
+        return redirect()->route('devices.index');
+    });
+
+    Route::get(
+        'devices',
+        [DeviceController::class, 'Index']
+    )->name('devices.index');
+
+    Route::get(
+        'devices-log',
+        [DeviceController::class, 'DeviceLog']
+    )->name('devices.DeviceLog');
+
+    Route::get(
+        'finger-log',
+        [DeviceController::class, 'FingerLog']
+    )->name('devices.FingerLog');
+
+    Route::get(
+        'attendance',
+        [DeviceController::class, 'Attendance']
+    )->name('devices.Attendance');
 });
 
-Route::get('devices', [DeviceController::class, 'Index'])->name('devices.index');
-Route::get('devices-log', [DeviceController::class, 'DeviceLog'])->name('devices.DeviceLog');
-Route::get('finger-log', [DeviceController::class, 'FingerLog'])->name('devices.FingerLog');
-Route::get('attendance', [DeviceController::class, 'Attendance'])->name('devices.Attendance');
 
-// 2. The Universal Core ADMS Route
-// Real machines send both Handshakes (GET) and Logs (POST) directly to /iclock/cdata
-Route::match(['get', 'post'], '/iclock/cdata', [iclockController::class, 'handleCdata']);
+/*
+|--------------------------------------------------------------------------
+| DEVICE ROUTES (NO LOGIN)
+|--------------------------------------------------------------------------
+*/
 
-// ADD THESE — accept the .aspx variant the device actually sends
-Route::get('/iclock/cdata.aspx', [iclockController::class, 'handleCdata']);
-Route::post('/iclock/cdata.aspx', [iclockController::class, 'handleCdata']);
+Route::match(
+    ['get', 'post'],
+    '/iclock/cdata',
+    [iclockController::class, 'handleCdata']
+);
 
-// Also cover getrequest.aspx which appeared in your logs
-Route::get('/iclock/getrequest.aspx', [iclockController::class, 'getrequest']);
+Route::get(
+    '/iclock/cdata.aspx',
+    [iclockController::class, 'handleCdata']
+);
 
-// 3. Fallbacks and Command Routes required by the ADMS firmware
-Route::get('/iclock/getrequest', [iclockController::class, 'getrequest']);
-Route::post('/iclock/devicecmd', [iclockController::class, 'devicecmd']);
+Route::post(
+    '/iclock/cdata.aspx',
+    [iclockController::class, 'handleCdata']
+);
 
-// 4. Verification Route
-Route::get('/hello', function() {
+Route::get(
+    '/iclock/getrequest',
+    [iclockController::class, 'getrequest']
+);
+
+Route::get(
+    '/iclock/getrequest.aspx',
+    [iclockController::class, 'getrequest']
+);
+
+Route::post(
+    '/iclock/devicecmd',
+    [iclockController::class, 'devicecmd']
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| TEST ROUTE
+|--------------------------------------------------------------------------
+*/
+
+Route::get('/hello', function () {
     return "Router is working!";
 });
