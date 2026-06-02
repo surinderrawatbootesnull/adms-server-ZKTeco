@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class iclockController extends Controller
@@ -22,70 +23,147 @@ class iclockController extends Controller
 
         if ($request->isMethod('post')) {
             $rawContent = $request->getContent();
-            $tot = 0;
+            $total = 0;
 
             if (!empty($rawContent)) {
+
                 $lines = preg_split('/\r\n|\r|\n/', $rawContent);
+
                 foreach ($lines as $line) {
+
                     $line = trim($line);
-                    if (empty($line)) continue;
+
+                    if (empty($line)) {
+                        continue;
+                    }
 
                     $data = explode("\t", $line);
-                    if (count($data) < 2) continue;
+
+                    if (count($data) < 2) {
+                        continue;
+                    }
 
                     try {
-                        DB::table('attendances')->insert([
+
+                        $employeeId = (int) trim($data[0]);
+                        $attendanceTimestamp = trim($data[1]);
+
+                        $status1 = isset($data[2]) && $data[2] !== '' ? (int)$data[2] : null;
+                        $status2 = isset($data[3]) && $data[3] !== '' ? (int)$data[3] : null;
+                        $status3 = isset($data[4]) && $data[4] !== '' ? (int)$data[4] : null;
+                        $status4 = isset($data[5]) && $data[5] !== '' ? (int)$data[5] : null;
+                        $status5 = isset($data[6]) && $data[6] !== '' ? (int)$data[6] : null;
+
+                        $attendanceId = DB::table('attendances')->insertGetId([
                             'sn'          => $sn,
                             'table'       => $table,
                             'stamp'       => $request->query('Stamp') ?? '',
-                            'employee_id' => (int) trim($data[0]),
-                            'timestamp'   => trim($data[1]),
-                            'status1'     => isset($data[2]) && $data[2] !== '' ? (int)$data[2] : null,
-                            'status2'     => isset($data[3]) && $data[3] !== '' ? (int)$data[3] : null,
-                            'status3'     => isset($data[4]) && $data[4] !== '' ? (int)$data[4] : null,
-                            'status4'     => isset($data[5]) && $data[5] !== '' ? (int)$data[5] : null,
-                            'status5'     => isset($data[6]) && $data[6] !== '' ? (int)$data[6] : null,
+                            'employee_id' => $employeeId,
+                            'timestamp'   => $attendanceTimestamp,
+                            'status1'     => $status1,
+                            'status2'     => $status2,
+                            'status3'     => $status3,
+                            'status4'     => $status4,
+                            'status5'     => $status5,
                             'created_at'  => now(),
                             'updated_at'  => now(),
                         ]);
-                        $tot++;
+
+                        $payload = [
+                            [
+                                'id'          => $attendanceId,
+                                'sn'          => $sn,
+                                'employee_id' => $employeeId,
+                                'timestamp'   => $attendanceTimestamp,
+                                'status_1'    => $status1,
+                                'status_2'    => $status2,
+                                'status_3'    => $status3,
+                                'status_4'    => $status4,
+                                'status_5'    => $status5,
+                            ]
+                        ];
+
+                        Log::info('Sending ESSL webhook', [
+                            'url'     => env('ESSL_WEBHOOK_URL'),
+                            'payload' => $payload,
+                        ]);
+
+                        try {
+
+                           $response = Http::timeout(15)
+                            ->acceptJson()
+                            ->withHeaders([
+                                'Content-Type' => 'application/json',
+                                'Cookie' => 'hr_auth_token=' . env('HR_AUTH_TOKEN'),
+                            ])
+                            ->post(
+                                env('ESSL_WEBHOOK_URL'),
+                                $payload
+                            );
+
+                            Log::info('Attendance webhook response', [
+                                'attendance_id' => $attendanceId,
+                                'status'        => $response->status(),
+                                'body'          => $response->body(),
+                            ]);
+
+                        } catch (\Exception $e) {
+
+                            Log::error('Attendance webhook failed', [
+                                'attendance_id' => $attendanceId,
+                                'error'         => $e->getMessage(),
+                            ]);
+                        }
+
+                        $total++;
+
                     } catch (\Exception $e) {
-                        Log::error("Attendance insert error: " . $e->getMessage());
+
+                        Log::error('Attendance insert error', [
+                            'line'  => $line,
+                            'error' => $e->getMessage(),
+                        ]);
                     }
                 }
             }
 
-            return response("OK: $tot\n", 200)->header('Content-Type', 'text/plain');
+            return response("OK: {$total}\n", 200)
+                ->header('Content-Type', 'text/plain');
         }
 
-        // GET — handshake response
         DB::table('devices')->updateOrInsert(
             ['no_sn' => $sn],
             ['online' => now()]
         );
 
-        $resp = "GET OPTION FROM: $sn\r\n" .
-                "Stamp=9999\r\n" .
-                "OpStamp=" . time() . "\r\n" .
-                "ErrorDelay=60\r\n" .
-                "Delay=30\r\n" .
-                "ResLogDay=18250\r\n" .
-                "ResLogDelCount=10000\r\n" .
-                "ResLogCount=50000\r\n" .
-                "TransTimes=00:00;23:59\r\n" .
-                "TransInterval=1\r\n" .
-                "TransFlag=1111000000\r\n" .
-                "Realtime=1\r\n" .
-                "Encrypt=0\r\n";
+        $response =
+            "GET OPTION FROM: {$sn}\r\n" .
+            "Stamp=9999\r\n" .
+            "OpStamp=" . time() . "\r\n" .
+            "ErrorDelay=60\r\n" .
+            "Delay=30\r\n" .
+            "ResLogDay=18250\r\n" .
+            "ResLogDelCount=10000\r\n" .
+            "ResLogCount=50000\r\n" .
+            "TransTimes=00:00;23:59\r\n" .
+            "TransInterval=1\r\n" .
+            "TransFlag=1111000000\r\n" .
+            "Realtime=1\r\n" .
+            "Encrypt=0\r\n";
 
-        return response($resp, 200)->header('Content-Type', 'text/plain');
+        return response($response, 200)
+            ->header('Content-Type', 'text/plain');
     }
 
-    public function getrequest() {
-        return response("OK", 200)->header('Content-Type', 'text/plain');
+    public function getrequest()
+    {
+        return response('OK', 200)
+            ->header('Content-Type', 'text/plain');
     }
 
-    public function devicecmd() {
-        return response("OK", 200)->header('Content-Type', 'text/plain');
+    public function devicecmd()
+    {
+        return response('OK', 200)
+            ->header('Content-Type', 'text/plain');
     }
 }
