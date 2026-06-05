@@ -12,7 +12,13 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        // $schedule->command('inspire')->hourly();
+        // Get 'APP_TIMEZONE' key from .env file
+        $timezone = env('APP_TIMEZONE', 'UTC');
+
+        // Place the automation command inside the schedule method where it belongs
+        $schedule->command('attendance:calculate-daily')
+            ->twiceDaily(14, 21)
+            ->timezone($timezone);
     }
 
     /**
