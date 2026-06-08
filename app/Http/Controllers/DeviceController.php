@@ -32,14 +32,39 @@ class DeviceController extends Controller
         $data['log'] = DB::table('finger_log')->select('id','data','url')->orderBy('id','DESC')->get();
         return view('devices.log',$data);
     }
-    public function Attendance() {
-       //$attendances = Attendance::latest('timestamp')->orderBy('id','DESC')->paginate(15);
-       $attendances = DB::table('attendances')->select('id','sn','table','stamp','employee_id','timestamp','status1','status2','status3','status4','status5')->orderBy('id','DESC')->paginate(15);
+ public function Attendance(Request $request)
+{
+    $query = DB::table('attendances')
+        ->select(
+            'id',
+            'sn',
+            'table',
+            'stamp',
+            'employee_id',
+            'timestamp',
+            'status1',
+            'status2',
+            'status3',
+            'status4',
+            'status5'
+        );
 
-        return view('devices.attendance', compact('attendances'));
-        
+    // Employee ID filter
+    if ($request->filled('employee_id')) {
+        $query->where('employee_id', $request->employee_id);
     }
 
+    // Single date filter
+    if ($request->filled('date')) {
+        $query->whereDate('timestamp', $request->date);
+    }
+
+    $attendances = $query
+        ->orderBy('id', 'DESC')
+        ->paginate(15);
+
+    return view('devices.attendance', compact('attendances'));
+}
     // // Menampilkan form tambah device
     // public function create()
     // {
