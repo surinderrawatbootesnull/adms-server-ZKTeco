@@ -100,7 +100,7 @@ class iclockController extends Controller
                                 'status_3'             => $status3,
                                 'status_4'             => $status4,
                                 'status_5'             => $status5,
-                                'total_time_in_office' => $totalTimeInOffice // Dynamically appended calculated metric
+                                'total_time_in_office' => $totalTimeInOffice
                             ]
                         ];
 
@@ -110,17 +110,20 @@ class iclockController extends Controller
                         ]);
 
                         try {
-
-                           $response = Http::timeout(15)
-                            ->acceptJson()
-                            ->withHeaders([
-                                'Content-Type' => 'application/json',
-                                'Cookie' => 'hr_auth_token=' . env('HR_AUTH_TOKEN'),
-                            ])
-                            ->post(
-                                env('ESSL_WEBHOOK_URL'),
-                                $payload
-                            );
+                            // Use withOptions to directly pass raw lowercased headers bypass normalizer
+                            $response = Http::timeout(15)
+                                ->acceptJson()
+                                ->withOptions([
+                                    'headers' => [
+                                        'content-type'      => 'application/json',
+                                        'cookie'            => 'hr_auth_token=' . env('HR_AUTH_TOKEN'),
+                                        'x-internal-secret' => env('HR_INTERNAL_SECRET'),
+                                    ]
+                                ])
+                                ->post(
+                                    env('ESSL_WEBHOOK_URL'),
+                                    $payload
+                                );
 
                             Log::info('Attendance webhook response', [
                                 'attendance_id' => $attendanceId,
@@ -176,13 +179,14 @@ class iclockController extends Controller
             ->header('Content-Type', 'text/plain');
     }
 
-    public function getrequest()
+
+    public function getrequest(Request $request)
     {
         return response('OK', 200)
             ->header('Content-Type', 'text/plain');
     }
 
-    public function devicecmd()
+    public function devicecmd(Request $request)
     {
         return response('OK', 200)
             ->header('Content-Type', 'text/plain');
