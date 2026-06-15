@@ -6,9 +6,18 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use App\Services\AttendanceService;
+use Carbon\Carbon;
 
 class iclockController extends Controller
 {
+    protected $attendanceService;
+
+    public function __construct(AttendanceService $attendanceService)
+    {
+        $this->attendanceService = $attendanceService;
+    }
+
     public function handleCdata(Request $request)
     {
         $secret = 'c63b75c1207fc357379492a8d5a0bb7af92604c5791b39e5cb7eff2e46fff1fa';
@@ -54,6 +63,7 @@ class iclockController extends Controller
                         $status4 = isset($data[5]) && $data[5] !== '' ? (int)$data[5] : null;
                         $status5 = isset($data[6]) && $data[6] !== '' ? (int)$data[6] : null;
 
+                        // add incoming log entry directly to local database
                         $attendanceId = DB::table('attendances')->insertGetId([
                             'sn'          => $sn,
                             'table'       => $table,
@@ -69,21 +79,32 @@ class iclockController extends Controller
                             'updated_at'  => now(),
                         ]);
 
+                        // Extract targeted date string context (YYYY-MM-DD) for calculation engine
+                        $punchDate = Carbon::parse($attendanceTimestamp)->toDateString();
+
+                        // Compute working metrics including the newly appended raw punch log row
+                        $calculationResult = $this->attendanceService->calculateDailyTotals($punchDate, $employeeId);
+                        
+                        // Extract specific formatted time string or default to zero balance baseline
+                        $totalTimeInOffice = $calculationResult['calculated_totals'][$employeeId] ?? '00:00:00';
+
+                        // Build comprehensive sync webhook packet payload structure
                         $payload = [
                             [
-                                'id'          => $attendanceId,
-                                'sn'          => $sn,
-                                'employee_id' => $employeeId,
-                                'timestamp'   => $attendanceTimestamp,
-                                'status_1'    => $status1,
-                                'status_2'    => $status2,
-                                'status_3'    => $status3,
-                                'status_4'    => $status4,
-                                'status_5'    => $status5,
+                                'id'                   => $attendanceId,
+                                'sn'                   => $sn,
+                                'employee_id'          => $employeeId,
+                                'timestamp'            => $attendanceTimestamp,
+                                'status_1'             => $status1,
+                                'status_2'             => $status2,
+                                'status_3'             => $status3,
+                                'status_4'             => $status4,
+                                'status_5'             => $status5,
+                                'total_time_in_office' => $totalTimeInOffice // Dynamically appended calculated metric
                             ]
                         ];
 
-                        Log::info('Sending ESSL webhook', [
+                        Log::info('Sending ESSL webhook with calculated totals', [
                             'url'     => env('ESSL_WEBHOOK_URL'),
                             'payload' => $payload,
                         ]);
