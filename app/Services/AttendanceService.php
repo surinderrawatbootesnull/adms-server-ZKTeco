@@ -12,8 +12,8 @@ class AttendanceService
      */
     public function calculateDailyTotals($dateString, $employeeId = null)
     {
-        // 1. Get the 'APP_TIMEZONE' key from .env file
-        $timezone = env('APP_TIMEZONE', 'UTC');
+       // 1. Get the 'APP_TIMEZONE' key from .env file
+        $timezone = env('APP_TIMEZONE', config('app.timezone', 'UTC'));
 
         // 2. Get the target date's logs from the database
         $query = DB::table('attendances')
@@ -35,15 +35,22 @@ class AttendanceService
 
         foreach ($grouped as $empId => $logs) {
             
-            // Sort logs chronologically to ensure pairing flow from morning to night
-            $sortedLogs = $logs->sortBy('timestamp')->values();
+            // Sort by timestamp first. If timestamps are identical or within the same minute, 
+            // use the auto-incrementing database ID as a tie-breaker. This preserves the 
+            // true physical order in which punches hit your application.
+            $sortedLogs = $logs->sort(function ($a, $b) {
+                if ($a->timestamp === $b->timestamp) {
+                    return $a->id <=> $b->id; 
+                }
+                return strcmp($a->timestamp, $b->timestamp);
+            })->values();
             
             $totalSecondsInOffice = 0;
             $lastInTime = null;
 
             foreach ($sortedLogs as $log) {
                 // Parse the log timestamp using your environment's timezone context
-                $logTime = Carbon::parse($log->timestamp, $timezone);
+                $logTime = Carbon::createFromFormat('Y-m-d H:i:s', $log->timestamp, $timezone);
                 $status = (int) $log->status1; // 0 = IN machine, 1 = OUT machine
 
                 if ($status === 0) {
@@ -61,10 +68,13 @@ class AttendanceService
                 }
             }
 
-            // LIVE TICKING If the employee checked IN but never checked OUT,
+            // LIVE TICKING: If the employee checked IN but never checked OUT,
             // and we are calculating for TODAY, track running time up to this exact second.
             if ($lastInTime !== null && $isToday) {
-                if ($currentTimeInOffice->gt($lastInTime)) {
+                // Ensure the instance matches the runtime timezone explicitly before comparison
+                $lastInTime->setTimezone($timezone);
+                
+                if ($currentTimeInOffice->greaterThan($lastInTime)) {
                     $totalSecondsInOffice += $lastInTime->diffInSeconds($currentTimeInOffice);
                 }
             }
