@@ -7,7 +7,7 @@
     "repositories": [
         {
             "type": "vcs",
-            "url": "https://github.com/surinderrawatbootesnull/bootesnull_logger"
+            "url": "https://github.com/surinderrawatbootesnull/bootesnull_logger.git"
         }
     ],
     "require": {
