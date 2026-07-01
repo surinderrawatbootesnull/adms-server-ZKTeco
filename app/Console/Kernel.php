@@ -12,12 +12,17 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        // Get 'APP_TIMEZONE' key from .env file
+        // Safe configuration lookup fallback
         $timezone = env('APP_TIMEZONE', 'UTC');
 
-        // Place the automation command inside the schedule method where it belongs
+        // Run 1: Every day at 14:00 (2:00 PM)
         $schedule->command('attendance:calculate-daily')
-            ->twiceDaily(14, 21)
+            ->dailyAt('14:00')
+            ->timezone($timezone);
+
+        // Run 2: Every day at 22:30 (10:30 PM)
+        $schedule->command('attendance:calculate-daily')
+            ->dailyAt('22:30')
             ->timezone($timezone);
     }
 

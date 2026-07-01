@@ -12,7 +12,7 @@ class CalculateDailyAttendance extends Command
     /**
      * The name and signature of the console command.
      */
-    protected $signature = 'attendance:calculate-daily';
+    protected $signature = 'attendance:calculate-daily {date? : Optional historical targeted date using YYYY-MM-DD format}';
 
     /**
      * The console command description.
@@ -29,12 +29,13 @@ class CalculateDailyAttendance extends Command
 
     public function handle()
     {
-        $this->info('Starting daily attendance processing calculations...');
+        // Safe configuration lookup (Production cache compliance)
+        $timezone = config('app.timezone', 'UTC');
         
-        $timezone = env('APP_TIMEZONE', 'UTC');
+        // Grab argument if provided manually, else default to today
+        $targetDate = $this->argument('date') ?: Carbon::today($timezone)->toDateString();
 
-        // Target today's date context using the dynamic timezone
-        $targetDate = Carbon::today($timezone)->toDateString();
+        $this->info("Starting attendance summary compilation calculations for date: {$targetDate}...");
 
         try {
             // Run core calculation service engine
@@ -46,34 +47,47 @@ class CalculateDailyAttendance extends Command
         }
 
         if (empty($calculatedTotals)) {
-            $this->warn("No active employee logs parsed for today ({$targetDate}).");
+            $this->warn("No active employee logs parsed for date ({$targetDate}).");
             return Command::SUCCESS;
         }
+
+        $now = Carbon::now($timezone);
 
         // Loop through calculations with individual row safeguards
         foreach ($calculatedTotals as $employeeId => $totalTime) {
             try {
-                $currentTimeString = Carbon::now($timezone)->toDateTimeString();
+                // Check if the summary row already exists to decide on created_at timestamp manually
+                $exists = DB::table('daily_attendance_summaries')
+                    ->where('employee_id', $employeeId)
+                    ->where('date', $targetDate)
+                    ->exists();
 
-                // Preserves creation timestamp
-                DB::table('daily_attendance_summaries')->updateOrInsert(
-                    [
-                        'employee_id' => $employeeId,
-                        'date'        => $targetDate,
-                    ],
-                    [
+                if ($exists) {
+                    // Row exists: only update total time and updated_at
+                    DB::table('daily_attendance_summaries')
+                        ->where('employee_id', $employeeId)
+                        ->where('date', $targetDate)
+                        ->update([
+                            'total_time_in_office' => $totalTime,
+                            'updated_at'           => $now,
+                        ]);
+                } else {
+                    // Row doesn't exist: insert clean values completely safely without DB::raw syntax overhead
+                    DB::table('daily_attendance_summaries')->insert([
+                        'employee_id'          => $employeeId,
+                        'date'                 => $targetDate,
                         'total_time_in_office' => $totalTime,
-                        'updated_at'           => Carbon::now($timezone),
-                        'created_at'           => DB::raw("COALESCE(created_at, '{$currentTimeString}')"),
-                    ]
-                );
+                        'created_at'           => $now,
+                        'updated_at'           => $now,
+                    ]);
+                }
             } catch (\Exception $rowException) {
                 // Individual row safeguard: Log errors quietly to console output without stopping the cron loop
-                $this->error("Skipped Employee {$employeeId} calculation due to data corruption. Error: {$rowException->getMessage()}");
+                $this->error("Skipped Employee {$employeeId} calculation due to processing errors. Error: {$rowException->getMessage()}");
             }
         }
 
-        $this->info('Success! Daily attendance summaries successfully processed and synchronized.');
+        $this->info("Success! Attendance summaries successfully processed and synchronized for {$targetDate}.");
         return Command::SUCCESS;
     }
 }

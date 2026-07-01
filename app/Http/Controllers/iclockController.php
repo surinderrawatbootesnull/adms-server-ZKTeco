@@ -109,9 +109,9 @@ class iclockController extends Controller
                             'payload' => $payload,
                         ]);
 
+                        // PRODUCTION WEBHOOK DISPATCH
                         try {
-                            // Use withOptions to directly pass raw lowercased headers bypass normalizer
-                            $response = Http::timeout(15)
+                            $prodResponse = Http::timeout(15)
                                 ->acceptJson()
                                 ->withOptions([
                                     'headers' => [
@@ -120,29 +120,51 @@ class iclockController extends Controller
                                         'x-internal-secret' => env('HR_INTERNAL_SECRET'),
                                     ]
                                 ])
-                                ->post(
-                                    env('ESSL_WEBHOOK_URL'),
-                                    $payload
-                                );
+                                ->post(env('ESSL_WEBHOOK_URL'), $payload);
 
-                            Log::info('Attendance webhook response', [
+                            Log::info('Production Attendance webhook response', [
                                 'attendance_id' => $attendanceId,
-                                'status'        => $response->status(),
-                                'body'          => $response->body(),
+                                'status'        => $prodResponse->status(),
+                                'body'          => $prodResponse->body(),
                             ]);
 
                         } catch (\Exception $e) {
-
-                            Log::error('Attendance webhook failed', [
+                            Log::error('Production Attendance webhook failed', [
                                 'attendance_id' => $attendanceId,
                                 'error'         => $e->getMessage(),
                             ]);
                         }
 
+                        // LOCAL TESTING WEBHOOK DISPATCH (Only if URL is configured, otherwise skip)
+                        if (env('LOCAL_ESSL_WEBHOOK_URL')) {
+                            try {
+                                $localResponse = Http::timeout(5) // Fast response timeout for local networks
+                                    ->acceptJson()
+                                    ->withOptions([
+                                        'headers' => [
+                                            'content-type'      => 'application/json',
+                                            'x-internal-secret' => env('LOCAL_HR_INTERNAL_SECRET'),
+                                        ]
+                                    ])
+                                    ->post(env('LOCAL_ESSL_WEBHOOK_URL'), $payload);
+
+                                Log::info('Local Attendance webhook response', [
+                                    'attendance_id' => $attendanceId,
+                                    'status'        => $localResponse->status(),
+                                    'body'          => $localResponse->body(),
+                                ]);
+
+                            } catch (\Exception $e) {
+                                Log::warning('Local testing webhook skipped or unreachable', [
+                                    'attendance_id' => $attendanceId,
+                                    'error'         => $e->getMessage(),
+                                ]);
+                            }
+                        }
+
                         $total++;
 
                     } catch (\Exception $e) {
-
                         Log::error('Attendance insert error', [
                             'line'  => $line,
                             'error' => $e->getMessage(),
@@ -178,7 +200,6 @@ class iclockController extends Controller
         return response($response, 200)
             ->header('Content-Type', 'text/plain');
     }
-
 
     public function getrequest(Request $request)
     {
