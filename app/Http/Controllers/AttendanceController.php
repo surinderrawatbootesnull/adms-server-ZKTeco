@@ -6,6 +6,8 @@ use App\Services\AttendanceService;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpFoundation\Response;
 
 class AttendanceController extends Controller
 {
@@ -19,11 +21,13 @@ class AttendanceController extends Controller
     /**
      * Fetch attendance records with precise calculations.
      * Supports optional URL parameter matching for employeeId.
+     * GET /api/attendance/{employeeId?}
      */
     public function getAttendance(Request $request, $employeeId = null)
     {
         try {
-            $timezone = env('APP_TIMEZONE', 'UTC');
+            // Safe config lookup to stay fully compliant with production config caching
+            $timezone = config('app.timezone', 'UTC');
             $dateParam = $request->query('date'); 
 
             // --- SCENARIO 1: HISTORICAL DATA MODE (?date=all) ---
@@ -41,27 +45,25 @@ class AttendanceController extends Controller
                 }
                 
                 $summaries = $summaryQuery->get()->keyBy(function ($item) {
-                    return $item->employee_id . '_' . $item->date;
+                    return ((int) $item->employee_id) . '_' . $item->date;
                 });
 
                 $todayStr = Carbon::today($timezone)->toDateString();
+                
+                // Calculate today's totals ONCE to prevent the N+1 query loop completely
+                $todayLiveTotals = $this->attendanceService->calculateDailyTotals($todayStr, $employeeId)['calculated_totals'] ?? [];
 
                 foreach ($attendance as $log) {
-                    $logDate = Carbon::parse($log->timestamp, $timezone)->toDateString();
-                    $lookupKey = $log->employee_id . '_' . $logDate;
+                    // FIX: Extract raw date string (YYYY-MM-DD) directly from text to prevent unexpected Carbon timezone shifting
+                    $logDate = explode(' ', $log->timestamp)[0];
+                    $empId = (int) $log->employee_id;
+                    $lookupKey = $empId . '_' . $logDate;
                     
                     if ($logDate === $todayStr) {
-                        // Keep today's running clock live ticking
-                        $liveResult = $this->attendanceService->calculateDailyTotals($logDate, $log->employee_id);
-                        $log->total_time_in_office = $liveResult['calculated_totals'][$log->employee_id] ?? '00:00:00';
+                        $log->total_time_in_office = $todayLiveTotals[$empId] ?? '00:00:00';
                     } else {
-                        // check if the summary row exists first!
-                        if (isset($summaries[$lookupKey])) {
-                            $log->total_time_in_office = $summaries[$lookupKey]->total_time_in_office;
-                        } else {
-                            
-                            $log->total_time_in_office = '00:00:00'; 
-                        }
+                        // Safely fall back to the pre-compiled summary rows or standard '00:00:00' format
+                        $log->total_time_in_office = $summaries[$lookupKey]->total_time_in_office ?? '00:00:00';
                     }
                 }
 
@@ -70,7 +72,7 @@ class AttendanceController extends Controller
                     'mode' => 'history',
                     'count' => $attendance->count(),
                     'data' => $attendance
-                ]);
+                ], Response::HTTP_OK);
             }
 
             // --- SCENARIO 2: SINGLE DAY MODE (DEFAULT TODAY OR EXPLICIT DATE) ---
@@ -82,7 +84,7 @@ class AttendanceController extends Controller
                     return response()->json([
                         'success' => false,
                         'message' => 'Invalid date format provided. Please use YYYY-MM-DD or "all".',
-                    ], 400);
+                    ], Response::HTTP_BAD_REQUEST);
                 }
             } else {
                 $targetDate = Carbon::today($timezone)->toDateString();
@@ -94,7 +96,9 @@ class AttendanceController extends Controller
             $officeTimes = $result['calculated_totals'];
 
             foreach ($attendance as $log) {
-                $log->total_time_in_office = $officeTimes[$log->employee_id] ?? '00:00:00';
+                // Explicit typecasting ensures array matching succeeds regardless of DB driver formats
+                $empId = (int) $log->employee_id;
+                $log->total_time_in_office = $officeTimes[$empId] ?? '00:00:00';
             }
 
             return response()->json([
@@ -103,14 +107,16 @@ class AttendanceController extends Controller
                 'target_date' => $targetDate,
                 'count' => $attendance->count(),
                 'data' => $attendance
-            ]);
+            ], Response::HTTP_OK);
 
         } catch (\Exception $e) {
+            Log::error("Attendance Query Processing Failure: " . $e->getMessage());
+
             return response()->json([
                 'success' => false,
                 'message' => 'Database Error.',
                 'error' => $e->getMessage()
-            ], 500);
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
 }

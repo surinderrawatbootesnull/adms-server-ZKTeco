@@ -25,7 +25,7 @@ class WebhookAttendanceController extends Controller
     public function getAttendance(Request $request, $employeeId = null)
     {
         try {
-            $timezone = env('APP_TIMEZONE', 'UTC');
+            $timezone = config('app.timezone', 'UTC');
             $dateParam = $request->query('date'); 
 
             // --- SCENARIO 1: HISTORICAL DATA MODE (?date=all) ---
@@ -43,24 +43,24 @@ class WebhookAttendanceController extends Controller
                 }
                 
                 $summaries = $summaryQuery->get()->keyBy(function ($item) {
-                    return $item->employee_id . '_' . $item->date;
+                    return ((int) $item->employee_id) . '_' . $item->date;
                 });
 
                 $todayStr = Carbon::today($timezone)->toDateString();
+                
+                // Calculate today's totals ONCE to prevent N+1 query loop
+                $todayLiveTotals = $this->attendanceService->calculateDailyTotals($todayStr, $employeeId)['calculated_totals'] ?? [];
 
                 foreach ($attendance as $log) {
-                    $logDate = Carbon::parse($log->timestamp, $timezone)->toDateString();
-                    $lookupKey = $log->employee_id . '_' . $logDate;
+                    // FIX: Extract raw date string (YYYY-MM-DD) directly from text to prevent unexpected Carbon timezone shifting
+                    $logDate = explode(' ', $log->timestamp)[0];
+                    $empId = (int) $log->employee_id;
+                    $lookupKey = $empId . '_' . $logDate;
                     
                     if ($logDate === $todayStr) {
-                        $liveResult = $this->attendanceService->calculateDailyTotals($logDate, $log->employee_id);
-                        $log->total_time_in_office = $liveResult['calculated_totals'][$log->employee_id] ?? '00:00:00';
+                        $log->total_time_in_office = $todayLiveTotals[$empId] ?? '00:00:00';
                     } else {
-                        if (isset($summaries[$lookupKey])) {
-                            $log->total_time_in_office = $summaries[$lookupKey]->total_time_in_office;
-                        } else {
-                            $log->total_time_in_office = '00:00:00'; 
-                        }
+                        $log->total_time_in_office = $summaries[$lookupKey]->total_time_in_office ?? '00:00:00';
                     }
                 }
 
@@ -93,7 +93,8 @@ class WebhookAttendanceController extends Controller
             $officeTimes = $result['calculated_totals'];
 
             foreach ($attendance as $log) {
-                $log->total_time_in_office = $officeTimes[$log->employee_id] ?? '00:00:00';
+                $empId = (int) $log->employee_id;
+                $log->total_time_in_office = $officeTimes[$empId] ?? '00:00:00';
             }
 
             return response()->json([

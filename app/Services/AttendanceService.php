@@ -9,13 +9,16 @@ class AttendanceService
 {
     /**
      * Centralized math formula to calculate total time in office for a given date context.
+     * * @param string $dateString
+     * @param int|null $employeeId
+     * @return array
      */
     public function calculateDailyTotals($dateString, $employeeId = null)
     {
-       // 1. Get the 'APP_TIMEZONE' key from .env file
-        $timezone = env('APP_TIMEZONE', config('app.timezone', 'UTC'));
+        // Safe configuration lookup (reads from compiled cache in production)
+        $timezone = config('app.timezone', 'UTC');
 
-        // 2. Get the target date's logs from the database
+        // Fetch logs strictly belonging to the target calendar day
         $query = DB::table('attendances')
             ->whereDate('timestamp', $dateString);
 
@@ -24,20 +27,18 @@ class AttendanceService
         }
 
         $attendance = $query->get();
-
-        // 3. Group records by employee to process working durations
         $grouped = $attendance->groupBy('employee_id');
         $officeTimes = [];
 
-        // Check if the requested date context matches today's local date
         $isToday = ($dateString === Carbon::today($timezone)->toDateString());
-        $currentTimeInOffice = Carbon::now($timezone);
+        $targetDateEnd = Carbon::parse($dateString, $timezone)->endOfDay();
+        
+        // Live ticking runs up to 'now' if checking today; otherwise caps at midnight of that date
+        $currentTimeInOffice = $isToday ? Carbon::now($timezone) : $targetDateEnd;
 
         foreach ($grouped as $empId => $logs) {
             
-            // Sort by timestamp first. If timestamps are identical or within the same minute, 
-            // use the auto-incrementing database ID as a tie-breaker. This preserves the 
-            // true physical order in which punches hit your application.
+            // Sort by timestamp, using auto-increment ID as a reliable tie-breaker
             $sortedLogs = $logs->sort(function ($a, $b) {
                 if ($a->timestamp === $b->timestamp) {
                     return $a->id <=> $b->id; 
@@ -47,31 +48,35 @@ class AttendanceService
             
             $totalSecondsInOffice = 0;
             $lastInTime = null;
+            $lastProcessedTimestamp = null;
 
             foreach ($sortedLogs as $log) {
-                // Parse the log timestamp using your environment's timezone context
                 $logTime = Carbon::createFromFormat('Y-m-d H:i:s', $log->timestamp, $timezone);
                 $status = (int) $log->status1; // 0 = IN machine, 1 = OUT machine
 
+                // Ignores duplicate scans from the biometric machine within 60 seconds
+                if ($lastProcessedTimestamp && $logTime->diffInSeconds($lastProcessedTimestamp) < 60) {
+                    continue; 
+                }
+                $lastProcessedTimestamp = $logTime;
+
                 if ($status === 0) {
-                    // Employee scanned an "IN" machine. Lock onto the first scan.
+                    // Lock onto the first IN scan of a pairing block
                     if ($lastInTime === null) {
                         $lastInTime = $logTime;
                     }
                 } 
                 elseif ($status === 1) {
-                    // Employee scanned an "OUT" machine. Pair it with the previous IN scan.
+                    // Pair with the preceding IN scan
                     if ($lastInTime !== null) {
                         $totalSecondsInOffice += $lastInTime->diffInSeconds($logTime);
-                        $lastInTime = null; // Clear anchor for the next pairing block
+                        $lastInTime = null; // Reset anchor for next block
                     }
                 }
             }
 
-            // LIVE TICKING: If the employee checked IN but never checked OUT,
-            // and we are calculating for TODAY, track running time up to this exact second.
-            if ($lastInTime !== null && $isToday) {
-                // Ensure the instance matches the runtime timezone explicitly before comparison
+            // --- MISSED OUT-PUNCH & LIVE TICKING SAFETY CATCH ---
+            if ($lastInTime !== null) {
                 $lastInTime->setTimezone($timezone);
                 
                 if ($currentTimeInOffice->greaterThan($lastInTime)) {
@@ -79,7 +84,7 @@ class AttendanceService
                 }
             }
 
-            // 4. Mathematical conversion from seconds into clean HH:MM:SS format
+            // Convert total accumulated seconds into standard HH:MM:SS format
             $hours = floor($totalSecondsInOffice / 3600);
             $minutes = floor(($totalSecondsInOffice / 60) % 60);
             $seconds = $totalSecondsInOffice % 60;
@@ -87,7 +92,6 @@ class AttendanceService
             $officeTimes[$empId] = sprintf('%02d:%02d:%02d', $hours, $minutes, $seconds);
         }
 
-        // Return both raw logs and calculated values back to the caller component
         return [
             'raw_logs' => $attendance,
             'calculated_totals' => $officeTimes
