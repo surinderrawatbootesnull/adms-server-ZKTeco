@@ -13,7 +13,7 @@ class Kernel extends ConsoleKernel
     protected function schedule(Schedule $schedule): void
     {
         // Safe configuration lookup fallback
-        $timezone = env('APP_TIMEZONE', 'UTC');
+        $timezone = config('app.timezone', 'UTC');
 
         // Run 1: Every day at 14:00 (2:00 PM)
         $schedule->command('attendance:calculate-daily')

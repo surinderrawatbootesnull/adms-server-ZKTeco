@@ -8,37 +8,34 @@ use Carbon\Carbon;
 class AttendanceService
 {
     /**
-     * Centralized math formula to calculate total time in office for a given date context.
-     * * @param string $dateString
-     * @param int|null $employeeId
-     * @return array
+     * Calculates total time in office.
+     * Logic: 
+     * 1. Sorts logs chronologically.
+     * 2. Ignores double-punches (hardware noise < 30s).
+     * 3. Protects the initial IN punch from duplicate INs.
+     * 4. Auto-closes missing OUT punches at 23:59:59.
      */
     public function calculateDailyTotals($dateString, $employeeId = null)
     {
-        // Safe configuration lookup (reads from compiled cache in production)
         $timezone = config('app.timezone', 'UTC');
-
-        // Fetch logs strictly belonging to the target calendar day
-        $query = DB::table('attendances')
-            ->whereDate('timestamp', $dateString);
-
+        
+        // 1. Fetch raw logs
+        $query = DB::table('attendances')->whereDate('timestamp', $dateString);
         if ($employeeId !== null) {
             $query->where('employee_id', $employeeId);
         }
-
         $attendance = $query->get();
+        
+        // 2. Group by employee to process individually
         $grouped = $attendance->groupBy('employee_id');
         $officeTimes = [];
-
-        $isToday = ($dateString === Carbon::today($timezone)->toDateString());
-        $targetDateEnd = Carbon::parse($dateString, $timezone)->endOfDay();
         
-        // Live ticking runs up to 'now' if checking today; otherwise caps at midnight of that date
-        $currentTimeInOffice = $isToday ? Carbon::now($timezone) : $targetDateEnd;
+        // Define "end of day" for unclosed shifts
+        $targetDateEnd = Carbon::parse($dateString, $timezone)->endOfDay();
 
         foreach ($grouped as $empId => $logs) {
             
-            // Sort by timestamp, using auto-increment ID as a reliable tie-breaker
+            // 3. Sorting: Time first, then database ID as a tie-breaker
             $sortedLogs = $logs->sort(function ($a, $b) {
                 if ($a->timestamp === $b->timestamp) {
                     return $a->id <=> $b->id; 
@@ -47,44 +44,62 @@ class AttendanceService
             })->values();
             
             $totalSecondsInOffice = 0;
-            $lastInTime = null;
-            $lastProcessedTimestamp = null;
+            $currentBlockStart = null;
+            $currentBlockEnd = null;
 
             foreach ($sortedLogs as $log) {
                 $logTime = Carbon::createFromFormat('Y-m-d H:i:s', $log->timestamp, $timezone);
-                $status = (int) $log->status1; // 0 = IN machine, 1 = OUT machine
+                $status = (int) $log->status1; // 0 = IN, 1 = OUT
 
-                // Ignores duplicate scans from the biometric machine within 60 seconds
-                if ($lastProcessedTimestamp && $logTime->diffInSeconds($lastProcessedTimestamp) < 60) {
-                    continue; 
-                }
-                $lastProcessedTimestamp = $logTime;
-
-                if ($status === 0) {
-                    // Lock onto the first IN scan of a pairing block
-                    if ($lastInTime === null) {
-                        $lastInTime = $logTime;
+                if ($status === 0) { // IN
+                    if ($currentBlockStart === null) {
+                        $currentBlockStart = $logTime;
+                    } elseif ($currentBlockEnd !== null) {
+                        // Logic: IN after an OUT sequence
+                        $gapSeconds = $logTime->diffInSeconds($currentBlockEnd);
+                        
+                        if ($gapSeconds <= 30) { 
+                            // Hardware noise: Ignore the IN, keep the exit block alive
+                            $currentBlockEnd = null;
+                        } else {
+                            // Genuine return: Save finished block, start new IN
+                            $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
+                            $currentBlockStart = $logTime;
+                            $currentBlockEnd = null;
+                        }
                     }
-                } 
-                elseif ($status === 1) {
-                    // Pair with the preceding IN scan
-                    if ($lastInTime !== null) {
-                        $totalSecondsInOffice += $lastInTime->diffInSeconds($logTime);
-                        $lastInTime = null; // Reset anchor for next block
+                    // Else: Consecutive IN punch. We ignore it to protect the original start time.
+                    
+                } elseif ($status === 1) { // OUT
+                    if ($currentBlockStart !== null) {
+                        if ($currentBlockEnd === null) {
+                            $currentBlockEnd = $logTime;
+                        } else {
+                            // Logic: Consecutive OUT punch (double swipe)
+                            $outGapSeconds = $logTime->diffInSeconds($currentBlockEnd);
+                            
+                            if ($outGapSeconds <= 30) { 
+                                // Hardware noise: Extend the exit time to the latest punch
+                                $currentBlockEnd = $logTime;
+                            } else {
+                                // Real gap: This is a new exit? Close the block.
+                                $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
+                                $currentBlockStart = null;
+                                $currentBlockEnd = null;
+                            }
+                        }
                     }
+                    // Else: Rogue OUT punch (no IN punch), ignore it.
                 }
             }
 
-            // --- MISSED OUT-PUNCH & LIVE TICKING SAFETY CATCH ---
-            if ($lastInTime !== null) {
-                $lastInTime->setTimezone($timezone);
-                
-                if ($currentTimeInOffice->greaterThan($lastInTime)) {
-                    $totalSecondsInOffice += $lastInTime->diffInSeconds($currentTimeInOffice);
-                }
+            // 4. Add any remaining open block // if Employees forgot to punch out, we consider the end of the day as the exit time.
+            if ($currentBlockStart !== null) {
+                $endTime = ($currentBlockEnd !== null) ? $currentBlockEnd : $targetDateEnd;
+                $totalSecondsInOffice += $currentBlockStart->diffInSeconds($endTime);
             }
 
-            // Convert total accumulated seconds into standard HH:MM:SS format
+            // 5. Convert to HH:MM:SS
             $hours = floor($totalSecondsInOffice / 3600);
             $minutes = floor(($totalSecondsInOffice / 60) % 60);
             $seconds = $totalSecondsInOffice % 60;
@@ -92,6 +107,7 @@ class AttendanceService
             $officeTimes[$empId] = sprintf('%02d:%02d:%02d', $hours, $minutes, $seconds);
         }
 
+        // 6. Return strictly in the format the Controller and Commands expect
         return [
             'raw_logs' => $attendance,
             'calculated_totals' => $officeTimes

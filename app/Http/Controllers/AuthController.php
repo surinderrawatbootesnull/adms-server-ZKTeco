@@ -14,39 +14,62 @@ class AuthController extends Controller
 
     public function login(Request $request)
     {
-      
-        $response = Http::post(
-              env('AUTH_API_URL'),
-            [
-                'email' => $request->email,
-                'password' => $request->password,
-            ]
-        );
-        if ($response->successful()) {
-        
-            $data = $response->json();
 
-            // token exists here
-            $token = $data['data']['token'] ?? null;
+        $request->validate([
+            'email' => 'required|email',
+            'password' => 'required',
+        ]);
 
-            if (!$token) {
-                return back()->with('error', 'Token missing');
+        try {
+            $response = Http::post(
+                rtrim(env('AUTH_API_URL'), '/') . '/oauth/login',
+                [
+                    'email' => $request->email,
+                    'password' => $request->password,
+                ]
+            );
+
+            if (!$response->successful()) {
+                return back()
+                    ->withInput($request->only('email'))
+                    ->with('error', 'Invalid credentials.');
             }
 
-            // store token in session
+            $data = $response->json();
+
+            $token = $data['token'] ?? null;
+
+            if (!$token) {
+                return back()
+                    ->withInput($request->only('email'))
+                    ->with('error', 'Authentication token missing.');
+            }
+
             session([
-                'auth_token' => $token
+                'auth_token' => $token,
+                'auth_user' => $data['user'] ?? [],
             ]);
 
             return redirect('/devices');
-        }
 
-        return back()->with('error', 'Invalid credentials');
-    
-}
+        } catch (\Exception $e) {
+
+            logger()->error('Authentication Error', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return back()
+                ->withInput($request->only('email'))
+                ->with('error', 'Unable to connect to authentication server.');
+        }
+    }
+
     public function logout()
     {
-        session()->forget('auth_token');
+        session()->forget([
+            'auth_token',
+            'auth_user',
+        ]);
 
         return redirect('/login');
     }

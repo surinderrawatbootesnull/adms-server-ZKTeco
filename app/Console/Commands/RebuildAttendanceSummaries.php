@@ -30,7 +30,7 @@ class RebuildAttendanceSummaries extends Command
             $this->info('Running in SMART mode. Missing employee data gaps will be filled automatically.');
         }
         
-        $timezone = env('APP_TIMEZONE', 'UTC');
+        $timezone = config('app.timezone', 'UTC');
 
         // 1. Fetch clean unique dates as a raw array to prevent memory leaks on large datasets
         $distinctDates = DB::table('attendances')
