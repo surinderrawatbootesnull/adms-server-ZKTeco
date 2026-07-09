@@ -9,11 +9,10 @@ class AttendanceService
 {
     /**
      * Calculates total time in office.
-     * 1. Sums finished blocks (IN -> OUT).
-     * 2. For the final session:
-     * - If OUT exists: Uses that time (Precise duration).
-     * - If no OUT (Today): Uses 'Now'.
-     * - If no OUT (Past): Uses 'End of Day' (Emergency fallback).
+     * 1. Fetches raw data.
+     * 2. Sanitizes data (Deduplication).
+     * 3. Sorts by time.
+     * 4. Calculates blocks, handles gaps (30s), and handles missing OUT punches.
      */
     public function calculateDailyTotals($dateString, $employeeId = null)
     {
@@ -32,7 +31,15 @@ class AttendanceService
         $officeTimes = [];
 
         foreach ($grouped as $empId => $logs) {
-            $sortedLogs = $logs->sort(function ($a, $b) {
+            // --- 1. DEDUPLICATION LAYER ---
+            // Before processing, remove exact duplicates (same time AND same status)
+            // This prevents noise from confusing the calculation loop.
+            $uniqueLogs = $logs->unique(function ($item) {
+                return $item->timestamp . '|' . $item->status1;
+            });
+
+            // --- 2. SORTING LAYER ---
+            $sortedLogs = $uniqueLogs->sort(function ($a, $b) {
                 if ($a->timestamp === $b->timestamp) return $a->id <=> $b->id;
                 return strcmp($a->timestamp, $b->timestamp);
             })->values();
@@ -41,6 +48,7 @@ class AttendanceService
             $currentBlockStart = null;
             $currentBlockEnd = null;
 
+            // --- 3. CALCULATION LOOP ---
             foreach ($sortedLogs as $log) {
                 $logTime = Carbon::createFromFormat('Y-m-d H:i:s', $log->timestamp, $timezone);
                 $status = (int) $log->status1;
@@ -51,7 +59,8 @@ class AttendanceService
                     } elseif ($currentBlockEnd !== null) {
                         $gapSeconds = $logTime->diffInSeconds($currentBlockEnd);
                         if ($gapSeconds <= 30) { 
-                            $currentBlockEnd = null;
+                            // Re-entering quickly, ignore gap
+                            $currentBlockEnd = null; 
                         } else {
                             $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
                             $currentBlockStart = $logTime;
@@ -76,12 +85,11 @@ class AttendanceService
                 }
             }
 
+            // --- 4. FALLBACK LOGIC ---
             if ($currentBlockStart !== null) {
-                // If a valid OUT punch exists, use it. This ensures "First IN - Last OUT"
                 if ($currentBlockEnd !== null) {
                     $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
                 } else {
-                    // No OUT punch: Use fallback logic
                     $endTime = $isToday ? Carbon::now($timezone) : $targetDateEnd;
                     $totalSecondsInOffice += $currentBlockStart->diffInSeconds($endTime);
                 }
