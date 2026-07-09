@@ -9,36 +9,33 @@ class AttendanceService
 {
     /**
      * Calculates total time in office.
-     * 1. Fetches raw data.
-     * 2. Sanitizes data (Deduplication).
-     * 3. Sorts by time.
-     * 4. Calculates blocks, handles gaps (30s), and handles missing OUT punches.
+     * Logic: Deduplicates -> Sorts -> Processes Blocks -> Handles Gaps/Open Shifts.
      */
     public function calculateDailyTotals($dateString, $employeeId = null)
     {
         $timezone = config('app.timezone', 'UTC');
         
-        $query = DB::table('attendances')->whereDate('timestamp', $dateString);
+        // 1. QUERY: Explicitly selecting columns prevents stale 'total_time_in_office' from leaking
+        $query = DB::table('attendances')
+            ->select('id', 'sn', 'table', 'stamp', 'employee_id', 'timestamp', 'status1', 'created_at', 'updated_at')
+            ->whereDate('timestamp', $dateString);
+            
         if ($employeeId !== null) {
             $query->where('employee_id', $employeeId);
         }
         $attendance = $query->get();
         
         $isToday = Carbon::now($timezone)->toDateString() === $dateString;
-        $targetDateEnd = Carbon::parse($dateString, $timezone)->endOfDay();
-        
         $grouped = $attendance->groupBy('employee_id');
         $officeTimes = [];
 
         foreach ($grouped as $empId => $logs) {
-            // --- 1. DEDUPLICATION LAYER ---
-            // Before processing, remove exact duplicates (same time AND same status)
-            // This prevents noise from confusing the calculation loop.
+            // 2. DEDUPLICATION: Removes exact duplicates
             $uniqueLogs = $logs->unique(function ($item) {
                 return $item->timestamp . '|' . $item->status1;
             });
 
-            // --- 2. SORTING LAYER ---
+            // 3. SORTING: Ensures chronological processing
             $sortedLogs = $uniqueLogs->sort(function ($a, $b) {
                 if ($a->timestamp === $b->timestamp) return $a->id <=> $b->id;
                 return strcmp($a->timestamp, $b->timestamp);
@@ -47,10 +44,12 @@ class AttendanceService
             $totalSecondsInOffice = 0;
             $currentBlockStart = null;
             $currentBlockEnd = null;
+            $lastLogTime = null;
 
-            // --- 3. CALCULATION LOOP ---
+            // 4. CALCULATION LOOP
             foreach ($sortedLogs as $log) {
                 $logTime = Carbon::createFromFormat('Y-m-d H:i:s', $log->timestamp, $timezone);
+                $lastLogTime = $logTime; 
                 $status = (int) $log->status1;
 
                 if ($status === 0) { // IN
@@ -59,7 +58,6 @@ class AttendanceService
                     } elseif ($currentBlockEnd !== null) {
                         $gapSeconds = $logTime->diffInSeconds($currentBlockEnd);
                         if ($gapSeconds <= 30) { 
-                            // Re-entering quickly, ignore gap
                             $currentBlockEnd = null; 
                         } else {
                             $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
@@ -74,7 +72,7 @@ class AttendanceService
                         } else {
                             $outGapSeconds = $logTime->diffInSeconds($currentBlockEnd);
                             if ($outGapSeconds <= 30) { 
-                                $currentBlockEnd = $logTime; // Extend exit
+                                $currentBlockEnd = $logTime;
                             } else {
                                 $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
                                 $currentBlockStart = null;
@@ -85,13 +83,18 @@ class AttendanceService
                 }
             }
 
-            // --- 4. FALLBACK LOGIC ---
+            // 5. FALLBACK LOGIC
             if ($currentBlockStart !== null) {
                 if ($currentBlockEnd !== null) {
                     $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
                 } else {
-                    $endTime = $isToday ? Carbon::now($timezone) : $targetDateEnd;
-                    $totalSecondsInOffice += $currentBlockStart->diffInSeconds($endTime);
+                    // Today: Count to NOW. Past: Count to the last known action (or 0 if ambiguous)
+                    $endTime = $isToday ? Carbon::now($timezone) : $lastLogTime;
+                    
+                    // Only add if it's today OR if we have a valid block to close
+                    if ($isToday || ($lastLogTime && $currentBlockStart->lt($lastLogTime))) {
+                        $totalSecondsInOffice += $currentBlockStart->diffInSeconds($endTime);
+                    }
                 }
             }
 
