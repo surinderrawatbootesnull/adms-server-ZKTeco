@@ -165,7 +165,7 @@ class iclockController extends Controller
         // 1. STAGING HR SYSTEM DISPATCH 
         if (env('ESSL_WEBHOOK_URL')) {
             try {
-                $stagingResponse = Http::timeout(5) 
+                $stagingResponse = Http::timeout(30) 
                     ->acceptJson()
                     ->withOptions([
                         'headers' => [
@@ -201,22 +201,22 @@ class iclockController extends Controller
                     ])
                     ->post(env('LOCAL_ESSL_WEBHOOK_URL'), $payload);
 
-                Log::info('Local Attendance webhook response', [
-                    'attendance_id' => $attendanceId,
-                    'status'        => $localResponse->status(),
-                ]);
+                // Log::info('Local Attendance webhook response', [
+                //     'attendance_id' => $attendanceId,
+                //     'status'        => $localResponse->status(),
+                // ]);
             } catch (\Exception $e) {
-                Log::warning('Local testing webhook skipped or unreachable', [
-                    'attendance_id' => $attendanceId,
-                    'error'         => $e->getMessage(),
-                ]);
+                // Log::warning('Local testing webhook skipped or unreachable', [
+                //     'attendance_id' => $attendanceId,
+                //     'error'         => $e->getMessage(),
+                // ]);
             }
         }
 
         // 3. PRODUCTION LIVE HR SYSTEM DISPATCH
         if (env('PROD_HR_WEBHOOK_URL')) {
             try {
-                $prodLiveResponse = Http::timeout(5) 
+                $prodLiveResponse = Http::timeout(30) 
                     ->acceptJson()
                     ->withOptions([
                         'headers' => [
