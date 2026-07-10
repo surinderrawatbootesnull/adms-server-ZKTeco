@@ -8,83 +8,96 @@ use Carbon\Carbon;
 class AttendanceService
 {
     /**
-     * Centralized math formula to calculate total time in office for a given date context.
-     * * @param string $dateString
-     * @param int|null $employeeId
-     * @return array
+     * Calculates total time in office.
+     * Logic: Deduplicates -> Sorts -> Processes Blocks -> Handles Gaps/Open Shifts.
      */
     public function calculateDailyTotals($dateString, $employeeId = null)
     {
-        // Safe configuration lookup (reads from compiled cache in production)
         $timezone = config('app.timezone', 'UTC');
-
-        // Fetch logs strictly belonging to the target calendar day
+        
+        // 1. QUERY: Explicitly selecting columns prevents stale 'total_time_in_office' from leaking
         $query = DB::table('attendances')
+            ->select('id', 'sn', 'table', 'stamp', 'employee_id', 'timestamp', 'status1', 'created_at', 'updated_at')
             ->whereDate('timestamp', $dateString);
-
+            
         if ($employeeId !== null) {
             $query->where('employee_id', $employeeId);
         }
-
         $attendance = $query->get();
+        
+        $isToday = Carbon::now($timezone)->toDateString() === $dateString;
         $grouped = $attendance->groupBy('employee_id');
         $officeTimes = [];
 
-        $isToday = ($dateString === Carbon::today($timezone)->toDateString());
-        $targetDateEnd = Carbon::parse($dateString, $timezone)->endOfDay();
-        
-        // Live ticking runs up to 'now' if checking today; otherwise caps at midnight of that date
-        $currentTimeInOffice = $isToday ? Carbon::now($timezone) : $targetDateEnd;
-
         foreach ($grouped as $empId => $logs) {
-            
-            // Sort by timestamp, using auto-increment ID as a reliable tie-breaker
-            $sortedLogs = $logs->sort(function ($a, $b) {
-                if ($a->timestamp === $b->timestamp) {
-                    return $a->id <=> $b->id; 
-                }
+            // 2. DEDUPLICATION: Removes exact duplicates
+            $uniqueLogs = $logs->unique(function ($item) {
+                return $item->timestamp . '|' . $item->status1;
+            });
+
+            // 3. SORTING: Ensures chronological processing
+            $sortedLogs = $uniqueLogs->sort(function ($a, $b) {
+                if ($a->timestamp === $b->timestamp) return $a->id <=> $b->id;
                 return strcmp($a->timestamp, $b->timestamp);
             })->values();
             
             $totalSecondsInOffice = 0;
-            $lastInTime = null;
-            $lastProcessedTimestamp = null;
+            $currentBlockStart = null;
+            $currentBlockEnd = null;
+            $lastLogTime = null;
 
+            // 4. CALCULATION LOOP
             foreach ($sortedLogs as $log) {
                 $logTime = Carbon::createFromFormat('Y-m-d H:i:s', $log->timestamp, $timezone);
-                $status = (int) $log->status1; // 0 = IN machine, 1 = OUT machine
+                $lastLogTime = $logTime; 
+                $status = (int) $log->status1;
 
-                // Ignores duplicate scans from the biometric machine within 60 seconds
-                if ($lastProcessedTimestamp && $logTime->diffInSeconds($lastProcessedTimestamp) < 60) {
-                    continue; 
-                }
-                $lastProcessedTimestamp = $logTime;
-
-                if ($status === 0) {
-                    // Lock onto the first IN scan of a pairing block
-                    if ($lastInTime === null) {
-                        $lastInTime = $logTime;
+                if ($status === 0) { // IN
+                    if ($currentBlockStart === null) {
+                        $currentBlockStart = $logTime;
+                    } elseif ($currentBlockEnd !== null) {
+                        $gapSeconds = $logTime->diffInSeconds($currentBlockEnd);
+                        if ($gapSeconds <= 30) { 
+                            $currentBlockEnd = null; 
+                        } else {
+                            $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
+                            $currentBlockStart = $logTime;
+                            $currentBlockEnd = null;
+                        }
                     }
-                } 
-                elseif ($status === 1) {
-                    // Pair with the preceding IN scan
-                    if ($lastInTime !== null) {
-                        $totalSecondsInOffice += $lastInTime->diffInSeconds($logTime);
-                        $lastInTime = null; // Reset anchor for next block
+                } elseif ($status === 1) { // OUT
+                    if ($currentBlockStart !== null) {
+                        if ($currentBlockEnd === null) {
+                            $currentBlockEnd = $logTime;
+                        } else {
+                            $outGapSeconds = $logTime->diffInSeconds($currentBlockEnd);
+                            if ($outGapSeconds <= 30) { 
+                                $currentBlockEnd = $logTime;
+                            } else {
+                                $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
+                                $currentBlockStart = null;
+                                $currentBlockEnd = null;
+                            }
+                        }
                     }
                 }
             }
 
-            // --- MISSED OUT-PUNCH & LIVE TICKING SAFETY CATCH ---
-            if ($lastInTime !== null) {
-                $lastInTime->setTimezone($timezone);
-                
-                if ($currentTimeInOffice->greaterThan($lastInTime)) {
-                    $totalSecondsInOffice += $lastInTime->diffInSeconds($currentTimeInOffice);
+            // 5. FALLBACK LOGIC
+            if ($currentBlockStart !== null) {
+                if ($currentBlockEnd !== null) {
+                    $totalSecondsInOffice += $currentBlockStart->diffInSeconds($currentBlockEnd);
+                } else {
+                    // Today: Count to NOW. Past: Count to the last known action (or 0 if ambiguous)
+                    $endTime = $isToday ? Carbon::now($timezone) : $lastLogTime;
+                    
+                    // Only add if it's today OR if we have a valid block to close
+                    if ($isToday || ($lastLogTime && $currentBlockStart->lt($lastLogTime))) {
+                        $totalSecondsInOffice += $currentBlockStart->diffInSeconds($endTime);
+                    }
                 }
             }
 
-            // Convert total accumulated seconds into standard HH:MM:SS format
             $hours = floor($totalSecondsInOffice / 3600);
             $minutes = floor(($totalSecondsInOffice / 60) % 60);
             $seconds = $totalSecondsInOffice % 60;
