@@ -144,6 +144,10 @@ return [
         // 'store'  => 'redis',
     ],
 
+
+    'outer_device_sn' => env('OUTER_DEVICE_SN'),
+    'inner_device_sn' => env('INNER_DEVICE_SN'),
+
     /*
     |--------------------------------------------------------------------------
     | Autoloaded Service Providers
