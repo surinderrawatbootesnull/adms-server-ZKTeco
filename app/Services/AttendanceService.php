@@ -52,7 +52,7 @@ class AttendanceService
                 $lastLogTime = $logTime; 
                 $status = (int) $log->status1;
 
-                if ($status === 0) { // IN
+                if ($log->sn === config('app.outer_device_sn')) { // IN
                     if ($currentBlockStart === null) {
                         $currentBlockStart = $logTime;
                     } elseif ($currentBlockEnd !== null) {
@@ -65,7 +65,7 @@ class AttendanceService
                             $currentBlockEnd = null;
                         }
                     }
-                } elseif ($status === 1) { // OUT
+                } elseif ($log->sn === config('app.inner_device_sn')) { // OUT
                     if ($currentBlockStart !== null) {
                         if ($currentBlockEnd === null) {
                             $currentBlockEnd = $logTime;
